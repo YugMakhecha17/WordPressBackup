@@ -1,0 +1,438 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 1 * *"
+            }
+          ]
+        }
+      },
+      "id": "a2530a54-d5b7-4e62-9923-a6565f8720d8",
+      "name": "Monthly Backup Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -2128,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// WordPress sites configuration\nconst sites = [\n  {\n    name: \"website1\",\n    domain: \"https://example1.com\",\n    wpAdminUser: \"admin\",\n    wpAdminPassword: \"wp_admin_pass_1\"\n  },\n  {\n    name: \"website2\", \n    domain: \"https://example2.com\",\n    wpAdminUser: \"admin\",\n    wpAdminPassword: \"wp_admin_pass_2\"\n  }\n];\n\nconst config = {\n  maxBackupsToKeep: 5,\n  oneDriveBasePath: \"/Backups\",\n  notificationEmail: \"admin@yourdomain.com\"\n};\n\nreturn sites.map(site => ({ \n  json: { \n    ...site, \n    config: config,\n    timestamp: new Date().toISOString().split('T')[0]\n  } \n}));"
+      },
+      "id": "f37f7137-d3b5-47c8-ae4d-27dfcc29d271",
+      "name": "Initialize Sites & Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1904,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "887b9dd1-5a5b-46df-85ea-7e0e9047c3c2",
+      "name": "Process Sites Individually",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1680,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.domain }}/wp-admin/admin-ajax.php",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded"
+            },
+            {
+              "name": "User-Agent",
+              "value": "n8n-backup-automation/1.0"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "action",
+              "value": "ai1wm_export"
+            },
+            {
+              "name": "ai1wm_manual_export",
+              "value": "1"
+            },
+            {
+              "name": "options[no_spam_comments]",
+              "value": "1"
+            },
+            {
+              "name": "options[no_post_revisions]",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "db738829-4427-40ca-b599-00e48a668b15",
+      "name": "Trigger All-in-One Backup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        -1440,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Poll for backup completion and get download link\nconst siteName = $json.name;\nconst domain = $json.domain;\nconst timestamp = $json.timestamp;\n\nlet attempts = 0;\nconst maxAttempts = 60; // 10 minutes with 10-second intervals\n\nwhile (attempts < maxAttempts) {\n  try {\n    // Check backup status via All-in-One WP Migration API\n    const statusResponse = await $http.request({\n      method: 'POST',\n      url: `${domain}/wp-admin/admin-ajax.php`,\n      headers: {\n        'Content-Type': 'application/x-www-form-urlencoded',\n        'User-Agent': 'n8n-backup-automation/1.0'\n      },\n      data: 'action=ai1wm_status'\n    });\n    \n    if (statusResponse.data && statusResponse.data.status === 'completed') {\n      const downloadUrl = `${domain}/wp-admin/admin-ajax.php?action=ai1wm_download&download_id=${statusResponse.data.download_id}`;\n      \n      return [{\n        json: {\n          siteName: siteName,\n          downloadUrl: downloadUrl,\n          backupFileName: `${siteName}_backup_${timestamp}.wpress`,\n          timestamp: new Date().toISOString(),\n          config: $json.config\n        }\n      }];\n    }\n    \n    if (statusResponse.data && statusResponse.data.status === 'error') {\n      throw new Error(`Backup failed: ${statusResponse.data.message}`);\n    }\n    \n    // Wait 10 seconds before next attempt\n    await new Promise(resolve => setTimeout(resolve, 10000));\n    attempts++;\n    \n  } catch (error) {\n    if (error.message.includes('Backup failed:')) {\n      throw error; // Re-throw backup errors immediately\n    }\n    console.log(`Status check attempt ${attempts + 1} failed, retrying...`);\n    attempts++;\n    await new Promise(resolve => setTimeout(resolve, 10000));\n  }\n}\n\n// Backup timed out\nthrow new Error(`Backup timeout for site: ${siteName}`);"
+      },
+      "id": "36217a37-19ca-4d97-b984-dc06fbaa0b46",
+      "name": "Wait & Get Download Link",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1248,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.downloadUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 600000
+        }
+      },
+      "id": "3938e6d9-0b23-497d-84a4-e044acf9ea66",
+      "name": "Download Backup File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        -1024,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Cleanup old backups - keep only the most recent ones\nconst siteName = $json.siteName;\nconst maxBackups = $json.config.maxBackupsToKeep;\nconst files = $node['List Site Backups'].json.value || [];\n\n// Filter .wpress files and sort by creation date (newest first)\nconst backupFiles = files\n  .filter(file => file.name.endsWith('.wpress'))\n  .sort((a, b) => new Date(b.createdDateTime) - new Date(a.createdDateTime));\n\n// Files to delete (keep only maxBackups most recent)\nconst filesToDelete = backupFiles.slice(maxBackups);\n\nif (filesToDelete.length > 0) {\n  console.log(`Deleting ${filesToDelete.length} old backups for ${siteName}`);\n  return filesToDelete.map(file => ({\n    json: {\n      siteName: siteName,\n      fileId: file.id,\n      fileName: file.name,\n      filePath: `/Backups/${siteName}/${file.name}`,\n      action: 'delete'\n    }\n  }));\n} else {\n  return [{\n    json: {\n      siteName: siteName,\n      message: 'No cleanup needed',\n      action: 'skip'\n    }\n  }];\n}"
+      },
+      "id": "001008cc-b601-498f-bbe4-1ada58958157",
+      "name": "Prepare Cleanup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -336,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cleanup-condition",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "delete",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6518e571-674b-45b9-bbdc-bc3031d01199",
+      "name": "Filter Files to Delete",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -128,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log successful backup\nconst siteName = $json.siteName || $node['Prepare Cleanup'].json.siteName;\nconst timestamp = new Date().toISOString();\n\nconst result = {\n  timestamp: timestamp,\n  siteName: siteName,\n  status: 'success',\n  backupType: 'all-in-one-wp-migration',\n  message: 'Backup completed successfully'\n};\n\nconsole.log(`✅ Backup completed for ${siteName}`);\nreturn [{ json: result }];"
+      },
+      "id": "e4f30cf8-b40b-4bc6-87b0-a813220d0336",
+      "name": "Log Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        144,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all results and generate final report\nconst allResults = $input.all();\nconst successCount = allResults.filter(r => r.json.status === 'success').length;\nconst totalSites = allResults.length;\n\nconst report = {\n  executionDate: new Date().toISOString().split('T')[0],\n  executionTime: new Date().toISOString(),\n  summary: {\n    totalSites: totalSites,\n    successful: successCount,\n    failed: totalSites - successCount,\n    successRate: Math.round((successCount / totalSites) * 100)\n  },\n  results: allResults.map(r => ({\n    siteName: r.json.siteName,\n    status: r.json.status,\n    message: r.json.message || r.json.error || 'Completed'\n  }))\n};\n\nconsole.log('Final Report:', report.summary);\nreturn [{ json: report }];"
+      },
+      "id": "c9099b5c-b62d-4448-b4b2-ae4986ec8804",
+      "name": "Generate Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.emailjs.com/api/v1.0/email/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"service_id\": \"your_service_id\",\n  \"template_id\": \"backup_report_template\",\n  \"user_id\": \"your_user_id\",\n  \"template_params\": {\n    \"to_email\": \"admin@yourdomain.com\",\n    \"subject\": \"WordPress Backup Report - {{ $json.executionDate }}\",\n    \"total_sites\": \"{{ $json.summary.totalSites }}\",\n    \"successful\": \"{{ $json.summary.successful }}\",\n    \"failed\": \"{{ $json.summary.failed }}\",\n    \"success_rate\": \"{{ $json.summary.successRate }}%\",\n    \"execution_time\": \"{{ $json.executionTime }}\",\n    \"details\": \"{{ $json.results.map(r => r.siteName + ': ' + r.status).join('\\\\n') }}\"\n  }\n}",
+        "options": {}
+      },
+      "id": "eb6daad1-1585-40bc-9558-80a3804ae761",
+      "name": "Send Email Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        592,
+        208
+      ]
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.microsoftOneDrive",
+      "typeVersion": 1,
+      "position": [
+        -768,
+        160
+      ],
+      "id": "9fb1a26d-8df1-43aa-b3af-08eea9609c9a",
+      "name": "Upload a file"
+    },
+    {
+      "parameters": {
+        "operation": "delete"
+      },
+      "type": "n8n-nodes-base.microsoftOneDrive",
+      "typeVersion": 1,
+      "position": [
+        144,
+        80
+      ],
+      "id": "219a3143-1d1f-4cda-af07-0cdf0f8f63ce",
+      "name": "Delete a file"
+    },
+    {
+      "parameters": {
+        "resource": "folder"
+      },
+      "type": "n8n-nodes-base.microsoftOneDrive",
+      "typeVersion": 1,
+      "position": [
+        -576,
+        160
+      ],
+      "id": "c83f934f-c88f-412c-ad67-c3431048374d",
+      "name": "Get items in a folder"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Monthly Backup Schedule": {
+      "main": [
+        [
+          {
+            "node": "Initialize Sites & Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Sites & Config": {
+      "main": [
+        [
+          {
+            "node": "Process Sites Individually",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Sites Individually": {
+      "main": [
+        [
+          {
+            "node": "Trigger All-in-One Backup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger All-in-One Backup": {
+      "main": [
+        [
+          {
+            "node": "Wait & Get Download Link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait & Get Download Link": {
+      "main": [
+        [
+          {
+            "node": "Download Backup File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Cleanup": {
+      "main": [
+        [
+          {
+            "node": "Filter Files to Delete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Files to Delete": {
+      "main": [
+        [
+          {
+            "node": "Delete a file",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Success": {
+      "main": [
+        [
+          {
+            "node": "Generate Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Report": {
+      "main": [
+        [
+          {
+            "node": "Send Email Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Backup File": {
+      "main": [
+        [
+          {
+            "node": "Upload a file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload a file": {
+      "main": [
+        [
+          {
+            "node": "Get items in a folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get items in a folder": {
+      "main": [
+        [
+          {
+            "node": "Prepare Cleanup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "meta": {
+    "instanceId": "8dad1fb75da72f33fd8a52befc441e5c56b08b001d3263c56e2e48cd2ee85f30"
+  },
+  "tags": [
+    {
+      "createdAt": "2025-07-27T07:34:18.011Z",
+      "updatedAt": "2025-07-27T07:34:18.011Z",
+      "id": "ahZoD3zPgZa619d3",
+      "name": "Backup Automation"
+    },
+    {
+      "createdAt": "2025-07-27T07:34:18.022Z",
+      "updatedAt": "2025-07-27T07:34:18.022Z",
+      "id": "wwAjnDishTR5zU7B",
+      "name": "WordPress"
+    }
+  ]
+}
